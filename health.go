@@ -100,32 +100,38 @@ func (health *Doctor) Healthy() bool {
 // start the health check. We use the time.After method instead of Tick to avoid
 // having a stack overflow when health-check do not end in a timely manner
 func (hc *healthCheckStatus) start(ctx context.Context, status *healthStatus) {
+	check := func() {
+		subctx, cancel := context.WithTimeout(ctx, hc.Timeout)
+		go func() {
+			defer cancel()
+			err := hc.Handler(subctx)
+			if hc.Aspect != nil {
+				err = hc.Aspect(hc.Check, err)
+			}
+			hc.Lock()
+			defer hc.Unlock()
+			if err == nil {
+				status.update(hc.pos, true)
+				hc.healthy = true
+				hc.msg = ""
+			} else {
+				status.update(hc.pos, false)
+				hc.healthy = false
+				hc.msg = err.Error()
+			}
+
+		}()
+		<-subctx.Done()
+	}
+
 	for {
+		check()
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(hc.Interval):
-			subctx, cancel := context.WithTimeout(ctx, hc.Timeout)
-			go func() {
-				defer cancel()
-				err := hc.Handler(subctx)
-				if hc.Aspect != nil {
-					err = hc.Aspect(hc.Check, err)
-				}
-				hc.Lock()
-				defer hc.Unlock()
-				if err == nil {
-					status.update(hc.pos, true)
-					hc.healthy = true
-					hc.msg = ""
-				} else {
-					status.update(hc.pos, false)
-					hc.healthy = false
-					hc.msg = err.Error()
-				}
-
-			}()
-			<-subctx.Done()
+			continue
 		}
 	}
 }
